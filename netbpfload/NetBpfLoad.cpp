@@ -286,26 +286,6 @@ int main(int argc, char** argv, char * const envp[]) {
         return 1;
     }
 
-    if (isAtLeastT && !android::bpf::isAtLeastKernelVersion(4, 9, 0)) {
-        ALOGE("Android T requires kernel 4.9.");
-        return 1;
-    }
-
-    if (isAtLeastU && !android::bpf::isAtLeastKernelVersion(4, 14, 0)) {
-        ALOGE("Android U requires kernel 4.14.");
-        return 1;
-    }
-
-    if (isAtLeastV && !android::bpf::isAtLeastKernelVersion(4, 19, 0)) {
-        ALOGE("Android V requires kernel 4.19.");
-        return 1;
-    }
-
-    if (isAtLeastV && android::bpf::isX86() && !android::bpf::isKernel64Bit()) {
-        ALOGE("Android V requires X86 kernel to be 64-bit.");
-        return 1;
-    }
-
     if (android::bpf::isUserspace32bit() && android::bpf::isAtLeastKernelVersion(6, 2, 0)) {
         /* Android 14/U should only launch on 64-bit kernels
          *   T launches on 5.10/5.15
@@ -375,8 +355,7 @@ int main(int argc, char** argv, char * const envp[]) {
             ALOGE("If this triggers randomly, you might be hitting some memory allocation "
                   "problems or startup script race.");
             ALOGE("--- DO NOT EXPECT SYSTEM TO BOOT SUCCESSFULLY ---");
-            sleep(20);
-            return 2;
+            return 0;
         }
     }
 
