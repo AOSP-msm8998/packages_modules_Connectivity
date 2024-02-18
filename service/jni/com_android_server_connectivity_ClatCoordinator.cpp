@@ -560,7 +560,6 @@ static const JNINativeMethod gMethods[] = {
 };
 
 int register_com_android_server_connectivity_ClatCoordinator(JNIEnv* env) {
-    verifyClatPerms();
     return jniRegisterNativeMethods(env,
             "android/net/connectivity/com/android/server/connectivity/ClatCoordinator",
             gMethods, NELEM(gMethods));
