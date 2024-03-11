@@ -26,14 +26,9 @@
 #include <nativehelper/JNIHelp.h>
 #include <net/if.h>
 #include <spawn.h>
-#include <sys/stat.h>
-#include <sys/types.h>
 #include <sys/wait.h>
-#include <sys/xattr.h>
 #include <string>
-#include <unistd.h>
 
-#include <android-modules-utils/sdk_level.h>
 #include <bpf/BpfMap.h>
 #include <bpf/BpfUtils.h>
 #include <netjniutils/netjniutils.h>
@@ -51,89 +46,7 @@
 
 namespace android {
 
-static bool fatal = false;
-
-#define ALOGF(s ...) do { ALOGE(s); fatal = true; } while(0)
-
-enum verify { VERIFY_DIR, VERIFY_BIN, VERIFY_PROG, VERIFY_MAP_RO, VERIFY_MAP_RW };
-
-static void verifyPerms(const char * const path,
-                        const mode_t mode, const uid_t uid, const gid_t gid,
-                        const char * const ctxt,
-                        const verify vtype) {
-    struct stat s = {};
-
-    if (lstat(path, &s)) ALOGF("lstat '%s' errno=%d", path, errno);
-    if (s.st_mode != mode) ALOGF("'%s' mode is 0%o != 0%o", path, s.st_mode, mode);
-    if (s.st_uid != uid) ALOGF("'%s' uid is %d != %d", path, s.st_uid, uid);
-    if (s.st_gid != gid) ALOGF("'%s' gid is %d != %d", path, s.st_gid, gid);
-
-    char b[255] = {};
-    int v = lgetxattr(path, "security.selinux", &b, sizeof(b));
-    if (v < 0) ALOGF("lgetxattr '%s' errno=%d", path, errno);
-    if (strncmp(ctxt, b, sizeof(b))) ALOGF("context of '%s' is '%s' != '%s'", path, b, ctxt);
-
-    int fd = -1;
-
-    switch (vtype) {
-      case VERIFY_DIR: return;
-      case VERIFY_BIN: return;
-      case VERIFY_PROG:   fd = bpf::retrieveProgram(path); break;
-      case VERIFY_MAP_RO: fd = bpf::mapRetrieveRO(path); break;
-      case VERIFY_MAP_RW: fd = bpf::mapRetrieveRW(path); break;
-    }
-
-    if (fd < 0) ALOGF("bpf_obj_get '%s' failed, errno=%d", path, errno);
-
-    if (fd >= 0) close(fd);
-}
-
-#undef ALOGF
-
-static const char* kClatdDir = "/apex/com.android.tethering/bin/for-system";
-static const char* kClatdBin = "/apex/com.android.tethering/bin/for-system/clatd";
-
-#define V(path, md, uid, gid, ctx, vtype) \
-    verifyPerms((path), (md), AID_ ## uid, AID_ ## gid, "u:object_r:" ctx ":s0", VERIFY_ ## vtype)
-
-static void verifyClatPerms() {
-    // We might run as part of tests instead of as part of system server
-    if (getuid() != AID_SYSTEM) return;
-
-    // First verify the clatd directory and binary,
-    // since this is built into the apex file system image,
-    // failures here are 99% likely to be build problems.
-    V(kClatdDir, S_IFDIR|0750, ROOT, SYSTEM, "system_file", DIR);
-    V(kClatdBin, S_IFREG|S_ISUID|S_ISGID|0755, CLAT, CLAT, "clatd_exec", BIN);
-
-    // Move on to verifying that the bpf programs and maps are as expected.
-    // This relies on the kernel and bpfloader.
-
-    // Clat BPF was only mainlined during T.
-    if (!modules::sdklevel::IsAtLeastT()) return;
-
-    V("/sys/fs/bpf", S_IFDIR|S_ISVTX|0777, ROOT, ROOT, "fs_bpf", DIR);
-    V("/sys/fs/bpf/net_shared", S_IFDIR|S_ISVTX|0777, ROOT, ROOT, "fs_bpf_net_shared", DIR);
-
-    // pre-U we do not have selinux privs to getattr on bpf maps/progs
-    // so while the below *should* be as listed, we have no way to actually verify
-    if (!modules::sdklevel::IsAtLeastU()) return;
-
-#define V2(path, md, vtype) \
-    V("/sys/fs/bpf/net_shared/" path, (md), ROOT, SYSTEM, "fs_bpf_net_shared", vtype)
-
-    V2("prog_clatd_schedcls_egress4_clat_rawip",  S_IFREG|0440, PROG);
-    V2("prog_clatd_schedcls_ingress6_clat_rawip", S_IFREG|0440, PROG);
-    V2("prog_clatd_schedcls_ingress6_clat_ether", S_IFREG|0440, PROG);
-    V2("map_clatd_clat_egress4_map",              S_IFREG|0660, MAP_RW);
-    V2("map_clatd_clat_ingress6_map",             S_IFREG|0660, MAP_RW);
-
-#undef V2
-
-    if (fatal) abort();
-}
-
-#undef V
+static const char* kClatdPath = "/apex/com.android.tethering/bin/for-system/clatd";
 
 static void throwIOException(JNIEnv* env, const char* msg, int error) {
     jniThrowExceptionFmt(env, "java/io/IOException", "%s: %s", msg, strerror(error));
@@ -453,7 +366,7 @@ static jint com_android_server_connectivity_ClatCoordinator_startClatd(
 
     // 5. actually perform vfork/dup2/execve
     pid_t pid;
-    if (int ret = posix_spawn(&pid, kClatdBin, &fa, &attr, (char* const*)args, nullptr)) {
+    if (int ret = posix_spawn(&pid, kClatdPath, &fa, &attr, (char* const*)args, nullptr)) {
         posix_spawnattr_destroy(&attr);
         posix_spawn_file_actions_destroy(&fa);
         throwIOException(env, "posix_spawn failed", ret);
@@ -560,7 +473,6 @@ static const JNINativeMethod gMethods[] = {
 };
 
 int register_com_android_server_connectivity_ClatCoordinator(JNIEnv* env) {
-    verifyClatPerms();
     return jniRegisterNativeMethods(env,
             "android/net/connectivity/com/android/server/connectivity/ClatCoordinator",
             gMethods, NELEM(gMethods));
